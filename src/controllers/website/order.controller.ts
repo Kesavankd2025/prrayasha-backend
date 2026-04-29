@@ -145,16 +145,19 @@ export class WebsiteOrderController {
                 const transaction_data = {
                     merchantId: merchantId,
                     merchantTransactionId: merchantTransactionId,
-                    merchantOrderId: order.orderId, // Human readable ID like ORD-1
-                    merchantUserId: order.userId.toString(), // Customer ID
+                    merchantOrderId: order.id.toString(), // Use internal ID string to match PHP logic
+                    merchantUserId: order.id.toString(),  // Use internal ID string to match PHP logic
                     amount: Math.round(order.grandTotal * 100),
                     redirectUrl: redirectUrl,
                     redirectMode: "POST",
                     callbackUrl: callbackUrl,
+                    mobileNumber: order.address?.phone?.replace(/\D/g, '').slice(-10), // Add mobile number for better UPI flow
                     paymentInstrument: {
                         type: "PAY_PAGE"
                     }
                 };
+
+                console.log("Initiating PhonePe with payload:", JSON.stringify(transaction_data, null, 2));
 
                 const encode = Buffer.from(JSON.stringify(transaction_data)).toString('base64');
                 const payload = encode + "/pg/v1/pay" + apiKey;
