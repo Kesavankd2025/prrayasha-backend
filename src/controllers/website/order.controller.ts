@@ -145,13 +145,12 @@ export class WebsiteOrderController {
                 const transaction_data = {
                     merchantId: merchantId,
                     merchantTransactionId: merchantTransactionId,
-                    merchantOrderId: order.id.toString(), // Use internal ID string to match PHP logic
-                    merchantUserId: order.id.toString(),  // Use internal ID string to match PHP logic
+                    merchantOrderId: order.id.toString(), // Internal numeric-like string
+                    merchantUserId: order.id.toString(),  // Internal numeric-like string
                     amount: Math.round(order.grandTotal * 100),
                     redirectUrl: redirectUrl,
                     redirectMode: "POST",
                     callbackUrl: callbackUrl,
-                    mobileNumber: order.address?.phone?.replace(/\D/g, '').slice(-10), // Add mobile number for better UPI flow
                     paymentInstrument: {
                         type: "PAY_PAGE"
                     }
