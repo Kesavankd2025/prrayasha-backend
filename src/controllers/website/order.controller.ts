@@ -139,14 +139,14 @@ export class WebsiteOrderController {
                 const redirectUrl = `${backendUrl}/api/website/order/phonepe/redirect`;
                 const callbackUrl = `${backendUrl}/api/website/order/phonepe/callback`;
 
-                // max 38 chars
-                const merchantTransactionId = 'T' + Date.now() + Math.floor(Math.random() * 1000);
+                // pay_{objectId}_{shortId} - max 38 chars
+                const merchantTransactionId = `pay_${order.id.toString()}_${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
 
                 const transaction_data = {
                     merchantId: merchantId,
                     merchantTransactionId: merchantTransactionId,
-                    merchantOrderId: order.id.toString(),
-                    merchantUserId: order.userId.toString(),
+                    merchantOrderId: order.orderId, // Human readable ID like ORD-1
+                    merchantUserId: order.userId.toString(), // Customer ID
                     amount: Math.round(order.grandTotal * 100),
                     redirectUrl: redirectUrl,
                     redirectMode: "POST",
@@ -204,39 +204,98 @@ export class WebsiteOrderController {
     @All("/phonepe/redirect")
     async paymentRedirect(@Req() req: any, @Res() res: Response) {
         try {
-            const data = req.body || req.query;
-            const { transactionId, code, merchantOrderId } = data;
-            const frontendUrl = process.env.FRONTEND_URL || "https://prrayasha-website.vercel.app";
+            const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3001";
+            let data = req.method === 'POST' ? req.body : req.query;
 
-            if (code === "PAYMENT_SUCCESS") {
-                const order = await this.orderRepo.findOneBy({ _id: new ObjectId(merchantOrderId) } as any);
-                if (order && order.paymentStatus !== "Paid") {
-                    order.paymentStatus = "Paid";
-                    order.transactionId = transactionId;
-                    await this.orderRepo.save(order);
+            console.log("PhonePe Redirect Received:", { method: req.method, data });
 
-                    // Clear cart
-                    await this.cartRepo.deleteMany({ userId: order.userId });
-                    // Deduct stock
-                    await deductStockForOrder(order.products, "order", "Order", order.id, order.userId);
+            // PhonePe might send response field with base64
+            if (data.response) {
+                try {
+                    const decoded = JSON.parse(Buffer.from(data.response, 'base64').toString());
+                    data = decoded;
+                    console.log("Decoded Redirect Response:", data);
+                } catch (e) {
+                    console.error("Failed to decode redirect response:", e);
                 }
-                return res.redirect(`${frontendUrl}/checkout?status=success&orderId=${merchantOrderId}`);
+            }
+
+            const { transactionId, code } = data;
+            
+            // Extract internal ID: pay_{objectId}_{shortId}
+            const parts = transactionId?.split('_') || [];
+            const orderId = parts[1]; // The full ObjectId
+
+            if (code === "PAYMENT_SUCCESS" && orderId) {
+                return res.redirect(`${frontendUrl}/checkout?status=success&orderId=${orderId}`);
             } else {
                 return res.redirect(`${frontendUrl}/checkout?status=failed`);
             }
         } catch (error) {
-            console.error("Redirect Error:", error);
-            return res.redirect(`https://prrayasha-website.vercel.app/checkout?status=error`);
+            console.error("PhonePe Redirect Error:", error);
+            const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3001";
+            return res.redirect(`${frontendUrl}/checkout?status=failed`);
         }
     }
 
     @Post("/phonepe/callback")
     async paymentCallback(@Req() req: any, @Res() res: Response) {
         try {
-            console.log("Phonepe callback data:", req.body);
-            return res.status(200).send("OK");
-        } catch (error: any) {
-            return res.status(500).send("Error");
+            console.log("PhonePe Callback Headers:", req.headers);
+            const { response: base64Response } = req.body;
+
+            if (!base64Response) {
+                console.error("Missing response in PhonePe callback body");
+                return res.status(StatusCodes.BAD_REQUEST).send("Missing response");
+            }
+
+            // Verify Checksum: SHA256(base64Response + saltKey) + "###" + saltIndex
+            const xVerifyHeader = req.headers['x-verify'] as string;
+            const saltKey = process.env.PHONEPE_SALT_KEY;
+            const saltIndex = process.env.PHONEPE_SALT_INDEX;
+
+            const checksum = crypto.createHash('sha256').update(base64Response + saltKey).digest('hex') + "###" + saltIndex;
+
+            if (xVerifyHeader !== checksum) {
+                console.error("PhonePe Callback Checksum Mismatch!", { received: xVerifyHeader, expected: checksum });
+                return res.status(StatusCodes.BAD_REQUEST).send("Invalid checksum");
+            }
+
+            // Decode Payload
+            const payload = JSON.parse(Buffer.from(base64Response, 'base64').toString());
+            console.log("Decoded Callback Payload:", payload);
+
+            if (payload.success && payload.code === 'PAYMENT_SUCCESS') {
+                const transactionId = payload.data.merchantTransactionId;
+                const parts = transactionId.split('_');
+                const orderInternalId = parts[1];
+
+                if (!ObjectId.isValid(orderInternalId)) {
+                    console.error("Invalid Order ID in transactionId:", transactionId);
+                    return res.status(StatusCodes.OK).send("OK"); // Acknowledge but skip
+                }
+
+                const order = await this.orderRepo.findOneBy({ _id: new ObjectId(orderInternalId) });
+                if (order && order.paymentStatus !== "Paid") {
+                    order.paymentStatus = "Paid";
+                    order.paymentDetails = payload.data;
+                    order.updatedAt = new Date();
+                    await this.orderRepo.save(order);
+
+                    // Deduct Stock
+                    await deductStockForOrder(order.products, "order", "Order", order.id, order.userId);
+
+                    // Clear Cart
+                    await this.cartRepo.deleteMany({ userId: order.userId });
+
+                    console.log(`Order ${order.orderId} (ID: ${orderInternalId}) marked as PAID via PhonePe callback`);
+                }
+            }
+
+            return res.status(StatusCodes.OK).send("OK");
+        } catch (error) {
+            console.error("PhonePe Callback Error:", error);
+            return res.status(StatusCodes.INTERNAL_SERVER_ERROR).send("Error processing callback");
         }
     }
 

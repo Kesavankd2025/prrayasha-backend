@@ -164,4 +164,7 @@ export class Order {
 
   @Column({ nullable: true })
   transactionId?: string;
+
+  @Column("simple-json", { nullable: true })
+  paymentDetails?: any;
 }
