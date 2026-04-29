@@ -1,0 +1,243 @@
+import { Post, Body, Req, Res, UseBefore, JsonController, Put, Param, Get, Delete, QueryParam } from "routing-controllers";
+import { ObjectId } from "mongodb";
+import { StatusCodes } from "http-status-codes";
+import { AuthMiddleware, AuthPayload } from "../../middlewares/AuthMiddleware";
+import { AppDataSource } from "../../data-source";
+import { SubCategory } from "../../entity/SubCategory";
+import { CreateSubCategoryDto, UpdateSubCategoryDto } from "../../dto/admin/subCategory.dto";
+import { handleErrorResponse, pagination, response } from "../../utils";
+import { Request, Response } from "express";
+import { Category } from "../../entity/Category";
+
+interface RequestWithFiles extends Request {
+    user: AuthPayload;
+}
+
+@UseBefore(AuthMiddleware)
+@JsonController("/sub-category")
+export class SubCategoryController {
+    private repo = AppDataSource.getMongoRepository(SubCategory);
+
+    @Post("/create")
+    async create(
+        @Req() req: RequestWithFiles,
+        @Body() body: CreateSubCategoryDto,
+        @Res() res: Response
+    ) {
+        try {
+            const doc = new SubCategory();
+            if (body.categoryId) {
+                const parent = await AppDataSource.getMongoRepository(Category).findOneBy({ _id: new ObjectId(body.categoryId), isDelete: 0 });
+                if (!parent) return response(res, StatusCodes.BAD_REQUEST, "Category not found");
+                if (parent.status === false) return response(res, StatusCodes.BAD_REQUEST, "Selected category is inactive");
+                doc.categoryId = new ObjectId(body.categoryId);
+            }
+            if (body.name !== undefined) {
+                const exists = await this.repo.findOne({ where: { name: { $regex: new RegExp(`^${body.name.trim()}$`, "i") }, isDelete: 0 } });
+                if (exists) return response(res, StatusCodes.BAD_REQUEST, "SubCategory with this name already exists");
+                doc.name = body.name;
+            }
+            if (body.slug !== undefined) doc.slug = body.slug;
+            if (body.description !== undefined) doc.description = body.description;
+            if (body.image !== undefined) doc.image = body.image;
+            if (body.status !== undefined) doc.status = body.status;
+            if (body.metaTitle !== undefined) doc.metaTitle = body.metaTitle;
+            if (body.metaKeywords !== undefined) doc.metaKeywords = body.metaKeywords;
+            if (body.metaDescription !== undefined) doc.metaDescription = body.metaDescription;
+
+            if (body.displayOrder !== undefined && body.displayOrder > 0) {
+                // 1. Check if previous orders exist (Global across all categories)
+                if (body.displayOrder > 1) {
+                    const prevExists = await this.repo.findOne({ 
+                        where: { 
+                            displayOrder: body.displayOrder - 1, 
+                            isDelete: 0 
+                        } 
+                    });
+                    if (!prevExists) return response(res, StatusCodes.BAD_REQUEST, `Please add order ${body.displayOrder - 1} first.`);
+                }
+                // 2. Shift existing orders
+                await this.repo.updateMany(
+                    { 
+                        displayOrder: { $gte: body.displayOrder }, 
+                        isDelete: 0 
+                    },
+                    { $inc: { displayOrder: 1 } }
+                );
+                doc.displayOrder = body.displayOrder;
+            } else {
+                // Default to last order + 1
+                const last = await this.repo.findOne({ 
+                    where: { isDelete: 0 }, 
+                    order: { displayOrder: -1 } 
+                });
+                doc.displayOrder = (last?.displayOrder || 0) + 1;
+            }
+
+            doc.isDelete = 0;
+            doc.createdBy = new ObjectId(req.user.userId);
+            doc.createdAt = new Date();
+
+            await this.repo.save(doc);
+            return response(res, StatusCodes.CREATED, "SubCategory created successfully", doc);
+        } catch (error: any) {
+            return handleErrorResponse(error, res);
+        }
+    }
+
+    @Put("/edit/:id")
+    async edit(
+        @Param("id") id: string,
+        @Req() req: RequestWithFiles,
+        @Body() body: UpdateSubCategoryDto,
+        @Res() res: Response
+    ) {
+        try {
+            if (!ObjectId.isValid(id)) return response(res, StatusCodes.BAD_REQUEST, "Invalid id");
+
+            const doc = await this.repo.findOneBy({ _id: new ObjectId(id), isDelete: 0 });
+            if (!doc) return response(res, StatusCodes.NOT_FOUND, "SubCategory not found");
+
+            if (body.categoryId) {
+                const parent = await AppDataSource.getMongoRepository(Category).findOneBy({ _id: new ObjectId(body.categoryId), isDelete: 0 });
+                if (!parent) return response(res, StatusCodes.BAD_REQUEST, "Category not found");
+                if (parent.status === false) return response(res, StatusCodes.BAD_REQUEST, "Selected category is inactive");
+                doc.categoryId = new ObjectId(body.categoryId);
+            }
+            if (body.name !== undefined) {
+                const exists = await this.repo.findOne({ where: { name: { $regex: new RegExp(`^${body.name.trim()}$`, "i") }, isDelete: 0, _id: { $ne: new ObjectId(id) } } });
+                if (exists) return response(res, StatusCodes.BAD_REQUEST, "SubCategory with this name already exists");
+                doc.name = body.name;
+            }
+            if (body.slug !== undefined) doc.slug = body.slug;
+            if (body.description !== undefined) doc.description = body.description;
+            if (body.image !== undefined) doc.image = body.image;
+            if (body.status !== undefined) doc.status = body.status;
+            if (body.metaTitle !== undefined) doc.metaTitle = body.metaTitle;
+            if (body.metaKeywords !== undefined) doc.metaKeywords = body.metaKeywords;
+            if (body.metaDescription !== undefined) doc.metaDescription = body.metaDescription;
+
+            if (body.displayOrder !== undefined && body.displayOrder !== doc.displayOrder && body.displayOrder > 0) {
+                // 1. Check if previous orders exist (Global)
+                if (body.displayOrder > 1) {
+                    const prevExists = await this.repo.findOne({ 
+                        where: { 
+                            displayOrder: body.displayOrder - 1, 
+                            isDelete: 0 
+                        } 
+                    });
+                    if (!prevExists) return response(res, StatusCodes.BAD_REQUEST, `Please add order ${body.displayOrder - 1} first.`);
+                }
+                // 2. Shift others
+                await this.repo.updateMany(
+                    { 
+                        _id: { $ne: doc.id },
+                        displayOrder: { $gte: body.displayOrder }, 
+                        isDelete: 0 
+                    },
+                    { $inc: { displayOrder: 1 } }
+                );
+                doc.displayOrder = body.displayOrder;
+            }
+
+            doc.updatedBy = new ObjectId(req.user.userId);
+            doc.updatedAt = new Date();
+
+            await this.repo.save(doc);
+            return response(res, StatusCodes.OK, "SubCategory updated successfully", doc);
+        } catch (error: any) {
+            return handleErrorResponse(error, res);
+        }
+    }
+
+    @Get("/list")
+    async list(
+        @QueryParam("page") page: number = 0,
+        @QueryParam("limit") limit: number = 10,
+        @QueryParam("search") search: string,
+        @QueryParam("status") status: boolean,
+        @Res() res: Response,
+        @QueryParam("activeParent") activeParent: boolean
+    ) {
+        try {
+            const match: any = { isDelete: 0 };
+            if (status !== undefined) match.status = String(status) === 'true';
+            if (search) {
+                match.$or = [{ name: { $regex: search, $options: "i" } }, { slug: { $regex: search, $options: "i" } }, { description: { $regex: search, $options: "i" } }];
+            }
+
+            const pipeline: any[] = [
+                { $match: match },
+                {
+                    $lookup: {
+                        from: "categories",
+                        localField: "categoryId",
+                        foreignField: "_id",
+                        as: "category"
+                    }
+                },
+                { $unwind: { path: "$category", preserveNullAndEmptyArrays: true } },
+            ];
+
+            if (String(activeParent) === 'true') {
+                pipeline.push({
+                    $match: {
+                        "category.status": true,
+                        "category.isDelete": 0
+                    }
+                });
+            }
+
+            pipeline.push(
+                { $sort: { displayOrder: 1, createdAt: -1 } },
+                {
+                    $facet: {
+                        data: [{ $skip: page * limit }, { $limit: limit }],
+                        meta: [{ $count: "total" }]
+                    }
+                }
+            );
+
+            const result = await this.repo.aggregate(pipeline).toArray();
+            const data = result[0]?.data || [];
+            const total = result[0]?.meta[0]?.total || 0;
+
+            return pagination(total, data, limit, page, res);
+        } catch (error) {
+            return handleErrorResponse(error, res);
+        }
+    }
+
+    @Get("/details/:id")
+    async details(@Param("id") id: string, @Res() res: Response) {
+        try {
+            if (!ObjectId.isValid(id)) return response(res, StatusCodes.BAD_REQUEST, "Invalid id");
+
+            const doc = await this.repo.findOneBy({ _id: new ObjectId(id), isDelete: 0 });
+            if (!doc) return response(res, StatusCodes.NOT_FOUND, "SubCategory not found");
+
+            return response(res, StatusCodes.OK, "Details fetched successfully", doc);
+        } catch (error: any) {
+            return handleErrorResponse(error, res);
+        }
+    }
+
+    @Delete("/delete/:id")
+    async delete(@Param("id") id: string, @Req() req: RequestWithFiles, @Res() res: Response) {
+        try {
+            if (!ObjectId.isValid(id)) return response(res, StatusCodes.BAD_REQUEST, "Invalid id");
+
+            const doc = await this.repo.findOneBy({ _id: new ObjectId(id), isDelete: 0 });
+            if (!doc) return response(res, StatusCodes.NOT_FOUND, "SubCategory not found");
+
+            doc.isDelete = 1;
+            doc.updatedBy = new ObjectId(req.user.userId);
+            doc.updatedAt = new Date();
+            await this.repo.save(doc);
+
+            return response(res, StatusCodes.OK, "SubCategory deleted successfully");
+        } catch (error: any) {
+            return handleErrorResponse(error, res);
+        }
+    }
+}
