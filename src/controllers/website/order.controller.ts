@@ -134,7 +134,7 @@ export class WebsiteOrderController {
                 const merchantId = process.env.PHONEPE_MERCHANT_ID || 'M22HOTYLY403R';
                 const apiKey = process.env.PHONEPE_SALT_KEY || 'dfe4668a-e8ae-40a5-b456-3679b72014bc';
                 const saltIndex = process.env.PHONEPE_SALT_INDEX || '1';
-                const backendUrl = process.env.BACKEND_URL || "http://65.0.84.181:4000";
+                const backendUrl = process.env.BACKEND_URL || "https://prrayasha-backend.onrender.com";
 
                 const redirectUrl = `${backendUrl}/api/website/order/phonepe/redirect`;
                 const callbackUrl = `${backendUrl}/api/website/order/phonepe/callback`;
@@ -206,7 +206,7 @@ export class WebsiteOrderController {
         try {
             const data = req.body || req.query;
             const { transactionId, code, merchantOrderId } = data;
-            const frontendUrl = process.env.FRONTEND_URL || "http://65.0.84.181:3000";
+            const frontendUrl = process.env.FRONTEND_URL || "https://prrayasha-website.vercel.app";
 
             if (code === "PAYMENT_SUCCESS") {
                 const order = await this.orderRepo.findOneBy({ _id: new ObjectId(merchantOrderId) } as any);
@@ -226,7 +226,7 @@ export class WebsiteOrderController {
             }
         } catch (error) {
             console.error("Redirect Error:", error);
-            return res.redirect(`http://65.0.84.181:3000/checkout?status=error`);
+            return res.redirect(`https://prrayasha-website.vercel.app/checkout?status=error`);
         }
     }
 
